@@ -65,11 +65,6 @@ local function trace(class)
          functions[f.func].meta.name = f.name
       end
 
-      -- is this method already known ?
-      if f.name then
-         methods[tostring(f.func)] = { name = f.name }
-      end
-
       -- print((" "):rep(call_indent)..">>"..tostring(f.func).." (".. tostring(f.name)..")")
       call_indent = call_indent + 1
    elseif class == "return" then
@@ -163,34 +158,27 @@ done = function()
    --
    -- scan all tables in _G for functions
 
-   local function func2name(m, tbl, prefix, visited)
+   local function func2name(m, o, prefix, n, visited)
       local visited = visited or {}
-
-      prefix = prefix and prefix .. "." or ""
-
-      -- print(prefix)
-
-      for name, func in pairs(tbl) do
-         if func == _G then
-            -- ignore
-         elseif type(func) == "function" then
-            if m[tostring(func)] and type(m[tostring(func)]) == "table" and m[tostring(func)].id 
-            then
-               -- nop - already mapped
-            else
-               -- remove the package.loaded. prefix from the loaded methods
-               m[tostring(func)] = { name = (prefix..name):gsub("^package\.loaded\.", ""), id = method_id }
-               method_id = method_id + 1
-            end
-         elseif type(func) == "table" and type(name) == "string" then
-            -- a package, class, ...
-            --
-            -- make sure we don't look endlessly
-            if not visited[func]
-            then
-               visited[func] = true
-               func2name(m, func, prefix..name, visited)
-            end
+      if visited[o]
+      then
+         return
+      end
+      visited[o] = true
+      if type(o) == 'function'
+      then
+         -- remove the package.loaded. prefix from the loaded methods
+         local n = prefix and prefix .. '.' .. n or n
+         n = n:gsub("^package\.loaded\.", "")
+         m[o] = { name = n, id = method_id }
+         method_id = method_id + 1
+      end
+      if type(o) == 'table'
+      then
+         local n = prefix and prefix .. '.' .. n or n
+         for n2, o2 in pairs(o) 
+         do
+            func2name(m, o2, n, n2, visited)
          end
       end
    end
@@ -198,25 +186,50 @@ done = function()
    -- resolve the function pointers
    func2name(methods, _G)
 
-   for key, func in pairs(functions) do
-      local f = func.meta
+   local funcstring2func = {}
+   for func, _ in pairs(functions)
+   do
+      funcstring2func[tostring(func)] = func
+   end
 
-      if (not f.name) and f.linedefined == 0 then
-         f.name = "(test-wrapper)"
+   local function pretty_name(func)
+      -- given typical function name (e.g. function:0x...),
+      -- try to get a pretty name for it.
+      -- alternatives are:
+      -- - method table
+      -- - metadata in the functions
+      local method = methods[func]
+      if method
+      then
+         --print('pretty_name method override', func, method.name)
+         return method.name
       end
-
-      local func_name = tostring(f.func)
-
-      if methods[func_name] then
-         func_name = methods[tostring(f.func)].name
+      local o = functions[func]
+      local fname = tostring(func)
+      if o and o.meta.name
+      then
+         local n = '[' .. o.meta.name .. '] ' .. fname
+         --print('pretty_name function override', func, n)
+         return n
       end
+      return fname
+   end
+
+   local function pretty_name_for_string(s)
+      local func = funcstring2func[s]
+      return pretty_name(func)
+   end
+
+   for func, o in pairs(functions) do
+      local f = o.meta
+      local func_name = pretty_name(func)
 
       tracefile:write("fl="..f.short_src.."\n")
       tracefile:write("fn="..func_name.."\n")
 
-      for i, line in ipairs(func.lines) do
-         if line:sub(1, 4) == "cfn=" and methods[line:sub(5)] then
-            tracefile:write("cfn="..(methods[line:sub(5)].name).."\n")
+      for i, line in ipairs(o.lines) do
+         if line:sub(1, 4) == "cfn=" then
+            tracefile:write("cfn=".. pretty_name_for_string(line:sub(5)).."\n")
          else
             tracefile:write(line.."\n")
          end
